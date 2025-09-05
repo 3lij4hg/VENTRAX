@@ -1,0 +1,146 @@
+name: Nightly ORCH-AUDIT
+
+on:
+  schedule:
+    # 03:00 Europe/Warsaw = 01:00 UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prepare workspace
+        run: |
+          mkdir -p workspace/SYSTEM_COVENANTS
+          echo '{"hub":"MASTER_BRIDGE_INDEX.json","links":[]}' > workspace/SYSTEM_COVENANTS/MASTER_BRIDGE_INDEX.json
+
+      - name: Fetch audit runner
+        run: |
+          cat > workspace/orch_audit_nightly.py << 'PY'
+#!/usr/bin/env python3
+import os, json, re, zipfile, hashlib
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+TZ = ZoneInfo("Europe/Warsaw")
+STAMP = datetime.now(TZ).strftime("%Y%m%dT%H%M%S%z")
+HUMAN = datetime.now(TZ).strftime("%Y-%m-%d %H:%M %Z")
+BASE = "workspace"
+OUT = f"{BASE}/ORCH_AUDIT_NIGHTLY_{STAMP}"
+os.makedirs(OUT, exist_ok=True)
+
+def sha256(p):
+    h = hashlib.sha256()
+    with open(p,"rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+# Scan
+scan_ext = {".md",".yml",".yaml",".json",".txt"}
+candidates = []
+for root,_,files in os.walk(BASE):
+    for fn in files:
+        ext = os.path.splitext(fn)[1].lower()
+        if ext in scan_ext:
+            rp = os.path.join(root, fn)
+            rel = os.path.relpath(rp, BASE)
+            if any(kw in rel.lower() for kw in ["orch","orchestrator","agent"]):
+                candidates.append(rp)
+
+guard_markers = re.compile(r"(loop[-_ ]?guard|sandboxed_infinity|staged[-_ ]?rollout|checkpoint|snapshot|freeze|hydration)", re.I)
+
+unguarded, guarded = [], []
+for p in candidates:
+    try:
+        with open(p,"r",encoding="utf-8",errors="ignore") as f:
+            content = f.read()
+        if guard_markers.search(content):
+            guarded.append(p)
+        else:
+            unguarded.append(p)
+    except:
+        continue
+
+report = {
+    "ts": HUMAN,
+    "scanned": len(candidates),
+    "guarded": len(guarded),
+    "unguarded": len(unguarded),
+    "policy": "ORCH-GUARD-ENFORCE active"
+}
+with open(f"{OUT}/SCAN_REPORT.json","w",encoding="utf-8") as f:
+    json.dump(report,f,ensure_ascii=False,indent=2)
+with open(f"{OUT}/GUARDED_LIST.txt","w",encoding="utf-8") as f:
+    f.write("\n".join([os.path.relpath(p, BASE) for p in guarded]))
+with open(f"{OUT}/UNGUARDED_LIST.txt","w",encoding="utf-8") as f:
+    f.write("\n".join([os.path.relpath(p, BASE) for p in unguarded]))
+
+# Manifest
+paths = []
+for root,_,files in os.walk(OUT):
+    for fn in files:
+        paths.append(os.path.join(root,fn))
+with open(f"{OUT}/MANIFEST_SHA256.txt","w",encoding="utf-8") as f:
+    for p in sorted(paths):
+        h = sha256(p)
+        f.write(f"{h}  {os.path.relpath(p, BASE)}\n")
+
+# ZIP
+zip_path = f"{BASE}/ORCH_AUDIT_NIGHTLY_{STAMP}.zip"
+with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as z:
+    for p in paths:
+        z.write(p, arcname=os.path.relpath(p, BASE))
+
+# Update Bridge
+MBI = f"{BASE}/SYSTEM_COVENANTS/MASTER_BRIDGE_INDEX.json"
+os.makedirs(os.path.dirname(MBI), exist_ok=True)
+if os.path.exists(MBI):
+    with open(MBI,"r",encoding="utf-8") as f:
+        hub = json.load(f)
+else:
+    hub = {"generated": HUMAN, "hub": "MASTER_BRIDGE_INDEX.json", "links": []}
+
+hub.setdefault("links", []).append({"name": os.path.basename(zip_path), "path": zip_path, "sha256": sha256(zip_path), "t": HUMAN})
+with open(MBI,"w",encoding="utf-8") as f:
+    json.dump(hub,f,ensure_ascii=False,indent=2)
+
+# Notify file
+notify = {
+  "when": HUMAN,
+  "what": "ORCH-AUDIT nightly",
+  "scanned": len(candidates),
+  "unguarded": len(unguarded),
+  "zip": os.path.basename(zip_path),
+  "bridge": MBI
+}
+with open(f"{OUT}/NOTIFY.json","w",encoding="utf-8") as f:
+    json.dump(notify,f,ensure_ascii=False,indent=2)
+
+print(json.dumps({"zip": zip_path, "notify": f"{OUT}/NOTIFY.json", "bridge": MBI}, ensure_ascii=False))
+PY
+          chmod +x workspace/orch_audit_nightly.py
+
+      - name: Run ORCH-AUDIT nightly
+        working-directory: workspace
+        run: |
+          ./orch_audit_nightly.py | tee RUN_LOG.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orch-audit-nightly
+          path: |
+            workspace/ORCH_AUDIT_NIGHTLY_*.zip
+            workspace/ORCH_AUDIT_NIGHTLY_*/NOTIFY.json
+            workspace/SYSTEM_COVENANTS/MASTER_BRIDGE_INDEX.json
+            workspace/RUN_LOG.txt
