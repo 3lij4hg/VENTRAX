@@ -42,7 +42,7 @@ workspace/
 
 ## How to use
 
-1. Ensure `.github/workflows/orch_audit_nightly.yml` is committed (already provided).
+1. Ensure `.github/workflows/orch_audit_nightly.yml` and `workspace/orch_audit_nightly.py` are committed (already provided).
 2. Push to your repository. Workflow runs nightly at 03:00 Europe/Warsaw or on **Run workflow** (manual).
 3. See **Actions → orch-audit-nightly → Summary → Artifacts**.
 
@@ -105,6 +105,7 @@ python3 workspace/orch_audit_nightly.py
 ## Change log
 
 - 2025-09-06 00:10 CEST: Initial version added (workflow + runner + artifacts schema).
+- 2025-11-25 00:00 UTC: Workflow promoted to `.github/workflows/orch_audit_nightly.yml`; runner checked in under `workspace/`.
 
 ---
 
