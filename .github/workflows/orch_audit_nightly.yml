@@ -1,0 +1,40 @@
+name: Nightly ORCH-AUDIT
+
+on:
+  schedule:
+    # 03:00 Europe/Warsaw = 01:00 UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Prepare workspace
+        run: |
+          mkdir -p workspace/SYSTEM_COVENANTS
+          if [ ! -f workspace/SYSTEM_COVENANTS/MASTER_BRIDGE_INDEX.json ]; then
+            echo '{"hub":"MASTER_BRIDGE_INDEX.json","links":[]}' > workspace/SYSTEM_COVENANTS/MASTER_BRIDGE_INDEX.json
+          fi
+
+      - name: Run ORCH-AUDIT nightly
+        run: |
+          python workspace/orch_audit_nightly.py | tee workspace/RUN_LOG.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orch-audit-nightly
+          path: |
+            workspace/ORCH_AUDIT_NIGHTLY_*.zip
+            workspace/ORCH_AUDIT_NIGHTLY_*/NOTIFY.json
+            workspace/SYSTEM_COVENANTS/MASTER_BRIDGE_INDEX.json
+            workspace/RUN_LOG.txt
